@@ -482,30 +482,10 @@ def convert_raster_from_isce2_gdal(input_image, ref_image, output_image):
     )
 
 
-def main():
-    """HyP3 entrypoint for the burst TOPS workflow"""
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-    parser.add_argument('--bucket', help='AWS S3 bucket HyP3 for upload the final product(s)')
-    parser.add_argument('--bucket-prefix', default='', help='Add a bucket prefix to product(s)')
-    parser.add_argument(
-        '--looks', choices=['20x4', '10x2', '5x1'], default='20x4', help='Number of looks to take in range and azimuth'
-    )
-    parser.add_argument(
-        '--apply-water-mask',
-        type=string_is_true,
-        default=False,
-        help='Apply a water body mask before unwrapping.',
-    )
-    # Allows granules to be given as a space-delimited list of strings (e.g. foo bar) or as a single
-    # quoted string that contains spaces (e.g. "foo bar"). AWS Batch uses the latter format when
-    # invoking the container command.
-    parser.add_argument('granules', type=str.split, nargs='+')
-
-    args = parser.parse_args()
-
-    args.granules = [item for sublist in args.granules for item in sublist]
-    if len(args.granules) != 2:
+def insar_tops_burst_workflow(granules, looks, apply_water_mask):
+    granules = [item for sublist in granules for item in sublist]
+    print(granules)
+    if len(granules) != 2:
         parser.error('Must provide exactly two granules')
 
     configure_root_logger()
@@ -513,11 +493,11 @@ def main():
 
     log.info('Begin ISCE2 TopsApp run')
 
-    reference_scene, secondary_scene = oldest_granule_first(args.granules[0], args.granules[1])
+    reference_scene, secondary_scene = oldest_granule_first(granules[0], granules[1])
     validate_bursts(reference_scene, secondary_scene)
     swath_number = int(reference_scene[12])
-    range_looks, azimuth_looks = [int(looks) for looks in args.looks.split('x')]
-    apply_water_mask = args.apply_water_mask
+    range_looks, azimuth_looks = [int(looks) for looks in looks.split('x')]
+    apply_water_mask = apply_water_mask
 
     insar_tops_burst(
         reference_scene=reference_scene,
@@ -532,7 +512,7 @@ def main():
 
     multilook_position = multilook_radar_merge_inputs(swath_number, rg_looks=range_looks, az_looks=azimuth_looks)
 
-    pixel_size = get_pixel_size(args.looks)
+    pixel_size = get_pixel_size(looks)
     product_name = get_product_name(reference_scene, secondary_scene, pixel_spacing=int(pixel_size))
 
     product_dir = Path(product_name)
@@ -578,6 +558,35 @@ def main():
         apply_water_mask=apply_water_mask,
     )
     output_zip = make_archive(base_name=product_name, format='zip', base_dir=product_name)
+    
+    return product_name, output_zip
+
+
+def main():
+    """HyP3 entrypoint for the burst TOPS workflow"""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument('--bucket', help='AWS S3 bucket HyP3 for upload the final product(s)')
+    parser.add_argument('--bucket-prefix', default='', help='Add a bucket prefix to product(s)')
+    parser.add_argument('--esa-username', default=None, help="Username for ESA's Copernicus Data Space Ecosystem")
+    parser.add_argument('--esa-password', default=None, help="Password for ESA's Copernicus Data Space Ecosystem")
+    parser.add_argument(
+        '--looks', choices=['20x4', '10x2', '5x1'], default='20x4', help='Number of looks to take in range and azimuth'
+    )
+    parser.add_argument(
+        '--apply-water-mask',
+        type=string_is_true,
+        default=False,
+        help='Apply a water body mask before unwrapping.',
+    )
+    # Allows granules to be given as a space-delimited list of strings (e.g. foo bar) or as a single
+    # quoted string that contains spaces (e.g. "foo bar"). AWS Batch uses the latter format when
+    # invoking the container command.
+    parser.add_argument('granules', type=str.split, nargs='+')
+
+    args = parser.parse_args()
+
+    product_zip, output_zip = insar_tops_burst_workflow(args.granules, args.looks, args.apply_water_mask, args.esa_username, args.esa_password)
 
     if args.bucket:
         for browse in product_dir.glob('*.png'):
